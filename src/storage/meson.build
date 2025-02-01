@@ -59,6 +59,11 @@ storage_backend_zfs_sources = [
   'storage_backend_zfs.c',
 ]
 
+storage_backend_dfs_sources = [
+  'storage_backend_dfs.c',
+]
+
+
 storage_backend_install_dir = libdir / 'libvirt' / 'storage-backend'
 
 if conf.has('WITH_STORAGE')
@@ -223,6 +228,16 @@ if conf.has('WITH_STORAGE_RBD')
     ],
     'deps': [
       rbd_dep
+    ],
+    'install_dir': storage_backend_install_dir,
+  }
+endif
+
+if conf.has('WITH_STORAGE_DFS')
+  virt_modules += {
+    'name': 'virt_storage_backend_dfs',
+    'sources': [
+      files(storage_backend_dfs_sources),
     ],
     'install_dir': storage_backend_install_dir,
   }
