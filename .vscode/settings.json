@@ -1,6 +1,8 @@
 {
     "files.associations": {
         "daos_fs.h": "c",
-        "daos.h": "c"
+        "daos.h": "c",
+        "storage_util.h": "c",
+        "config.h": "c"
     }
 }

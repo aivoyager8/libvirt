@@ -113,6 +113,15 @@ virSecretDefParseUsage(xmlXPathContextPtr ctxt,
         }
         break;
 
+    case VIR_SECRET_USAGE_TYPE_DAOS:
+        def->usage_id = virXPathString("string(./name)", ctxt);
+        if (!def->usage_id) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("DAOS usage specified, but name is missing"));
+            return -1;
+        }
+        break;
+
     case VIR_SECRET_USAGE_TYPE_LAST:
     default:
         virReportError(VIR_ERR_INTERNAL_ERROR,
@@ -222,6 +231,10 @@ virSecretDefFormatUsage(virBuffer *buf,
         break;
 
     case VIR_SECRET_USAGE_TYPE_VTPM:
+        virBufferEscapeString(&childBuf, "<name>%s</name>\n", def->usage_id);
+        break;
+
+    case VIR_SECRET_USAGE_TYPE_DAOS:
         virBufferEscapeString(&childBuf, "<name>%s</name>\n", def->usage_id);
         break;
 

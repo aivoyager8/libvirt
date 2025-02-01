@@ -57,6 +57,7 @@ typedef enum {
     VIR_SECRET_USAGE_TYPE_ISCSI = 3, /* (Since: 1.0.4) */
     VIR_SECRET_USAGE_TYPE_TLS = 4, /* (Since: 2.3.0) */
     VIR_SECRET_USAGE_TYPE_VTPM = 5, /* (Since: 5.6.0) */
+    VIR_SECRET_USAGE_TYPE_DAOS = 6, /* (Since: 10.10.0) */
 
 # ifdef VIR_ENUM_SENTINELS
     VIR_SECRET_USAGE_TYPE_LAST
