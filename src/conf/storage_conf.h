@@ -103,7 +103,7 @@ typedef enum {
     VIR_STORAGE_POOL_GLUSTER,  /* Gluster device */
     VIR_STORAGE_POOL_ZFS,      /* ZFS */
     VIR_STORAGE_POOL_VSTORAGE, /* Virtuozzo Storage */
-
+    VIR_STORAGE_POOL_DFS,      /* Daos filesystem */
     VIR_STORAGE_POOL_LAST,
 } virStoragePoolType;
 

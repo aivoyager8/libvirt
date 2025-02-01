@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "daos_fs.h": "c",
+        "daos.h": "c"
+    }
+}
