@@ -61,13 +61,68 @@ typedef struct _virStoragePoolDFSConfigOptionsDef {
 // 添加前向声明
 static void virStoragePoolDefDFSNamespaceFree(void *nsdata);
 
-static int
-virStorageBackendDFSOpenConn(virStorageBackendDFSState *ptr,
-                             virStoragePoolDef *def)
+/**
+ * Opens a connection to the DFS storage backend.
+ *
+ * @param ptr Pointer to DFS backend state structure
+ * @param def Storage pool definition
+ *
+ * @return 0 on success, -1 on failure
+ */
+static int virStorageBackendDFSOpenConn(virStorageBackendDFSState *ptr,
+                                       virStoragePoolDef *def)
 {
+    g_autofree char *pool_cont = NULL;
     int ret = -1;
-    VIR_DEBUG("Opening DFS connection to pool %p'%s'", ptr, def->source.name);
-    return ret;
+    char *slash;
+
+    if (!ptr || !def || !def->source.name || !def->source.dir) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                      _("missing required DFS connection parameters"));
+        return -1;
+    }
+
+    // Make a copy and parse pool/container
+    pool_cont = g_strdup(def->source.dir);
+    if ((slash = strchr(pool_cont, '/')) == NULL) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                      _("invalid DFS dir format - expected pool/container"));
+        return -1;
+    }
+    *slash = '\0';
+
+    // Store pool and container names
+    ptr->pool = g_strdup(pool_cont);
+    ptr->cont = g_strdup(slash + 1);
+    ptr->file = g_strdup(def->source.name);
+
+    if (!ptr->pool || !ptr->cont || !ptr->file) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                      _("failed to allocate DFS connection strings"));
+        goto cleanup;
+    }
+
+    // Connect to DAOS pool
+    ret = daos_pool_connect(ptr->pool, NULL, DAOS_PC_RW, 
+                           &ptr->poh, NULL, NULL);
+    if (ret < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                      _("failed to connect to DFS pool '%s': %d"),
+                      ptr->pool, ret);
+        goto cleanup;
+    }
+
+    ptr->starttime = time(NULL);
+    VIR_DEBUG("Connected to DFS pool '%s'", ptr->pool);
+    return 0;
+
+cleanup:
+    if (ptr->poh.cookie)
+        daos_pool_disconnect(ptr->poh, NULL);
+    g_clear_pointer(&ptr->pool, g_free);
+    g_clear_pointer(&ptr->cont, g_free); 
+    g_clear_pointer(&ptr->file, g_free);
+    return -1;
 }
 
 static void
@@ -225,7 +280,6 @@ virStorageBackendDFSRefreshVol(virStoragePoolObj *pool,
     virStoragePoolDef *def = virStoragePoolObjGetDef(pool);
     virStorageBackendDFSState *ptr = NULL;
     dfs_obj_t *obj = NULL;
-    dfs_attr_t attr;
     int ret = -1;
 
     if (!(ptr = g_new0(virStorageBackendDFSState, 1)))
@@ -234,9 +288,7 @@ virStorageBackendDFSRefreshVol(virStoragePoolObj *pool,
     if (virStorageBackendDFSOpenConn(ptr, def) < 0)
         goto cleanup;
 
-    // 使用正确的属性成员
-    vol->target.capacity = attr.da_chunk_size;
-    vol->target.allocation = attr.da_chunk_size;
+    VIR_DEBUG("Refreshing DFS volume '%s'", vol->name);
 
     ret = 0;
 
