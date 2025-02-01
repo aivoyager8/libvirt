@@ -118,28 +118,71 @@ static int virStorageBackendDFSOpenConn(virStorageBackendDFSState *ptr,
 
 cleanup:
     if (ptr->poh.cookie)
+    {
         daos_pool_disconnect(ptr->poh, NULL);
+    }
     g_clear_pointer(&ptr->pool, g_free);
-    g_clear_pointer(&ptr->cont, g_free); 
+    g_clear_pointer(&ptr->cont, g_free);
     g_clear_pointer(&ptr->file, g_free);
     return -1;
 }
 
-static void
-virStorageBackendDFSCloseConn(virStorageBackendDFSState *ptr)
+/**
+ * Closes the DFS connection and cleans up associated resources
+ *
+ * @param ptr Pointer to the DFS storage backend state structure to be cleaned up
+ *
+ * This function handles cleanup of DFS connection state, ensuring proper
+ * disconnection from the DFS storage backend and release of any associated
+ * resources.
+ */
+static void virStorageBackendDFSCloseConn(virStorageBackendDFSState *ptr)
 {
     if (!ptr)
+    {
         return;
+    }
+
+    if (ptr->poh.cookie)
+    {
+        daos_pool_disconnect(ptr->poh, NULL);
+        ptr->poh.cookie = 0;
+    }
+
+    g_clear_pointer(&ptr->pool, g_free);
+    g_clear_pointer(&ptr->cont, g_free);
+    g_clear_pointer(&ptr->file, g_free);
 }
 
-static int
-virStorageBackendDFSCreateVol(virStoragePoolObj *pool,
+
+/**
+ * Frees the DFS storage backend state structure
+ *
+ * @param ptr Pointer to the DFS storage backend state structure to be freed
+ *
+ * This function handles cleanup of the DFS storage backend state structure,
+ * ensuring proper release of any associated resources.
+ */
+static int virStorageBackendDFSCreateVol(virStoragePoolObj *pool,
                               virStorageVolDef *vol)
 {
-    virStoragePoolDef *def = virStoragePoolObjGetDef(pool); 
+    virStoragePoolDef *def = virStoragePoolObjGetDef(pool);
     dfs_obj_t *obj = NULL;
-    int ret = -1;
     virStorageBackendDFSState *ptr = NULL;
+    int ret = -1;
+
+    if (!def || !vol) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                      _("missing pool or volume definition"));
+        return -1;
+    }
+
+    // Check volume format early
+    if (vol->target.format != VIR_STORAGE_FILE_RAW) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                      _("only RAW volumes are supported by this storage pool"));
+        return -1;
+    }
 
     if (!(ptr = g_new0(virStorageBackendDFSState, 1)))
         return -1;
@@ -147,18 +190,25 @@ virStorageBackendDFSCreateVol(virStoragePoolObj *pool,
     if (virStorageBackendDFSOpenConn(ptr, def) < 0)
         goto cleanup;
 
-    VIR_DEBUG("Creating DFS volume '%s' ", vol->name);
-    goto cleanup;
+    VIR_DEBUG("Creating DFS volume '%s' in pool '%s'", 
+              vol->name, def->source.name);
 
-
+    // Set volume attributes
     vol->type = VIR_STORAGE_VOL_NETWORK;
     vol->target.format = VIR_STORAGE_FILE_RAW;
 
-    VIR_FREE(vol->target.path);
+    // Update volume paths
+    g_clear_pointer(&vol->target.path, g_free);
     vol->target.path = g_strdup_printf("%s/%s", def->source.dir, vol->name);
 
-    VIR_FREE(vol->key);
+    g_clear_pointer(&vol->key, g_free);
     vol->key = g_strdup_printf("%s/%s", def->source.name, vol->name);
+
+    if (!vol->target.path || !vol->key) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                      _("failed to allocate volume paths"));
+        goto cleanup;
+    }
 
     ret = 0;
 
