@@ -1213,6 +1213,22 @@ else
   rbd_dep = dependency('', required: false)
 endif
 
+storage_dfs_opt = get_option('storage_dfs')
+dfs_dep = cc.find_library('dfs', required: storage_dfs_opt)
+daos_dep = cc.find_library('daos', required: storage_dfs_opt)
+daos_common_dep = cc.find_library('daos_common', required: storage_dfs_opt)
+
+if dfs_dep.found() and daos_dep.found() and daos_common_dep.found()
+  conf.set('WITH_DFS', 1)
+  dfs_dep = declare_dependency(
+    dependencies: [
+      dfs_dep,
+      daos_dep,
+      daos_common_dep,
+    ],
+  )
+endif
+
 # readline 7.0 is the first version which includes pkg-config support
 readline_version = '7.0'
 if not get_option('readline').disabled()
