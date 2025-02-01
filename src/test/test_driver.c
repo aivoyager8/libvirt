@@ -7347,6 +7347,7 @@ testStorageVolumeTypeForPool(int pooltype)
     case VIR_STORAGE_POOL_ISCSI:
     case VIR_STORAGE_POOL_SCSI:
     case VIR_STORAGE_POOL_ZFS:
+    case VIR_STORAGE_POOL_DFS:
         return VIR_STORAGE_VOL_BLOCK;
     case VIR_STORAGE_POOL_LAST:
     default:

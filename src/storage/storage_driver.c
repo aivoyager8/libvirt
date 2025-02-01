@@ -1628,6 +1628,7 @@ storageVolLookupByPathCallback(virStoragePoolObj *obj,
         case VIR_STORAGE_POOL_RBD:
         case VIR_STORAGE_POOL_SHEEPDOG:
         case VIR_STORAGE_POOL_ZFS:
+        case VIR_STORAGE_POOL_DFS:
         case VIR_STORAGE_POOL_LAST:
             stable_path = g_strdup(data->path);
             break;

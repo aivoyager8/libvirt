@@ -31216,6 +31216,7 @@ virDomainStorageSourceTranslateSourcePool(virStorageSource *src,
     case VIR_STORAGE_POOL_RBD:
     case VIR_STORAGE_POOL_SHEEPDOG:
     case VIR_STORAGE_POOL_GLUSTER:
+    case VIR_STORAGE_POOL_DFS:
     case VIR_STORAGE_POOL_LAST:
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
                        _("using '%1$s' pools for backing 'volume' disks isn't yet supported"),

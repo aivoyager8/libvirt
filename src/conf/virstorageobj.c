@@ -1440,6 +1440,7 @@ virStoragePoolObjSourceFindDuplicateCb(const void *payload,
 
     case VIR_STORAGE_POOL_ISCSI_DIRECT:
     case VIR_STORAGE_POOL_RBD:
+    case VIR_STORAGE_POOL_DFS:
     case VIR_STORAGE_POOL_LAST:
         break;
     }

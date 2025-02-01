@@ -1187,6 +1187,9 @@ cmdPoolList(vshControl *ctl, const vshCmd *cmd G_GNUC_UNUSED)
             case VIR_STORAGE_POOL_VSTORAGE:
                 flags |= VIR_CONNECT_LIST_STORAGE_POOLS_VSTORAGE;
                 break;
+            case VIR_STORAGE_POOL_DFS:
+                flags |= VIR_CONNECT_LIST_STORAGE_POOLS_DFS;
+                break;
             case VIR_STORAGE_POOL_LAST:
                 break;
             }
