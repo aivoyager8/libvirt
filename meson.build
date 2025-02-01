@@ -1219,7 +1219,6 @@ daos_dep = cc.find_library('daos', required: storage_dfs_opt)
 daos_common_dep = cc.find_library('daos_common', required: storage_dfs_opt)
 
 if dfs_dep.found() and daos_dep.found() and daos_common_dep.found()
-  conf.set('WITH_DFS', 1)
   dfs_dep = declare_dependency(
     dependencies: [
       dfs_dep,
@@ -1935,6 +1934,13 @@ if conf.has('WITH_LIBVIRTD')
   endif
 endif
 
+  if not get_option('storage_dfs').disabled() and dfs_dep.found()
+    use_storage = true
+    conf.set('WITH_STORAGE_DFS', 1)
+  elif get_option('storage_dfs').enabled()
+    error('You must install the libdaos library & headers to compile libvirt')
+  endif
+
 if use_storage
   conf.set('WITH_STORAGE', 1)
 endif
@@ -2296,6 +2302,7 @@ storagedriver_summary = {
   'SCSI': conf.has('WITH_STORAGE_SCSI'),
   'Virtuozzo storage': conf.has('WITH_STORAGE_VSTORAGE'),
   'ZFS': conf.has('WITH_STORAGE_ZFS'),
+  'DFS': conf.has('WITH_STORAGE_DFS'),
 }
 summary(storagedriver_summary, section: 'Storage Drivers', bool_yn: true)
 
@@ -2348,6 +2355,7 @@ libs_summary = {
   'selinux': selinux_dep.found(),
   'udev': udev_dep.found(),
   'xdr': xdr_dep.found(),
+  'dfs': dfs_dep.found(),
 }
 summary(libs_summary, section: 'Libraries', bool_yn: true)
 

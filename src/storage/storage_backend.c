@@ -61,6 +61,9 @@
 #if WITH_STORAGE_ZFS
 # include "storage_backend_zfs.h"
 #endif
+#if WITH_STORAGE_DFS
+# include "storage_backend_dfs.h"
+#endif
 #if WITH_STORAGE_VSTORAGE
 # include "storage_backend_vstorage.h"
 #endif
@@ -131,6 +134,9 @@ virStorageBackendDriversRegister(bool allbackends G_GNUC_UNUSED)
 #endif
 #if WITH_STORAGE_ZFS
     VIR_STORAGE_BACKEND_REGISTER(virStorageBackendZFSRegister, "zfs");
+#endif
+#if WITH_STORAGE_DFS
+    VIR_STORAGE_BACKEND_REGISTER(virStorageBackendRBDRegister, "dfs");
 #endif
 #if WITH_STORAGE_VSTORAGE
     VIR_STORAGE_BACKEND_REGISTER(virStorageBackendVstorageRegister, "vstorage");
