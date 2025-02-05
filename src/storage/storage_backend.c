@@ -136,7 +136,7 @@ virStorageBackendDriversRegister(bool allbackends G_GNUC_UNUSED)
     VIR_STORAGE_BACKEND_REGISTER(virStorageBackendZFSRegister, "zfs");
 #endif
 #if WITH_STORAGE_DFS
-    VIR_STORAGE_BACKEND_REGISTER(virStorageBackendRBDRegister, "dfs");
+    VIR_STORAGE_BACKEND_REGISTER(virStorageBackendDFSRegister, "dfs");
 #endif
 #if WITH_STORAGE_VSTORAGE
     VIR_STORAGE_BACKEND_REGISTER(virStorageBackendVstorageRegister, "vstorage");

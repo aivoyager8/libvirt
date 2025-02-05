@@ -239,6 +239,11 @@ if conf.has('WITH_STORAGE_DFS')
     'sources': [
       files(storage_backend_dfs_sources),
     ],
+    'deps': [
+      dfs_dep,
+      daos_dep,
+      daos_common_dep,
+    ],
     'install_dir': storage_backend_install_dir,
   }
 endif

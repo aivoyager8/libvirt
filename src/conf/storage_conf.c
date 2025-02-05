@@ -242,6 +242,18 @@ static virStoragePoolTypeInfo poolTypeInfo[] = {
           .formatToString = virStorageFileFormatTypeToString,
       }
     },
+    {.poolType = VIR_STORAGE_POOL_DFS,
+     .poolOptions = {
+         .flags = (VIR_STORAGE_POOL_SOURCE_HOST |
+                   VIR_STORAGE_POOL_SOURCE_NETWORK |
+                   VIR_STORAGE_POOL_SOURCE_NAME),
+      },
+      .volOptions = {
+          .defaultFormat = VIR_STORAGE_FILE_RAW,
+          .formatFromString = virStorageVolumeFormatFromString,
+          .formatToString = virStorageFileFormatTypeToString,
+      }
+    },
     {.poolType = VIR_STORAGE_POOL_SHEEPDOG,
      .poolOptions = {
          .flags = (VIR_STORAGE_POOL_SOURCE_HOST |
