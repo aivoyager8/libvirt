@@ -619,15 +619,18 @@ virStoragePoolDefDFSNamespaceFormatXML(virBuffer *buf,
 
 virStorageBackend virStorageBackendDFS = {
     .type = VIR_STORAGE_POOL_DFS,
-
-    .refreshPool = virStorageBackendDFSRefreshPool,
-    .createVol = virStorageBackendDFSCreateVol,
-    .buildVol = virStorageBackendDFSBuildVol,
-    .buildVolFrom = virStorageBackendDFSBuildVolFrom,
-    .refreshVol = virStorageBackendDFSRefreshVol,
-    .deleteVol = virStorageBackendDFSDeleteVol,
-    .resizeVol = virStorageBackendDFSResizeVol,
-    .wipeVol = virStorageBackendDFSVolWipe
+    
+    // Pool operations
+    .refreshPool = virStorageBackendDFSRefreshPool,   // 获取存储池容量信息 
+    
+    // Volume operations
+    .createVol = virStorageBackendDFSCreateVol,       // 创建卷定义
+    .buildVol = virStorageBackendDFSBuildVol,         // 实际创建卷文件 
+    .buildVolFrom = virStorageBackendDFSBuildVolFrom, // 从现有卷创建新卷
+    .refreshVol = virStorageBackendDFSRefreshVol,     // 刷新卷信息
+    .deleteVol = virStorageBackendDFSDeleteVol,       // 删除卷
+    .resizeVol = virStorageBackendDFSResizeVol,       // 调整卷大小
+    .wipeVol = virStorageBackendDFSVolWipe,          // 擦除卷内容
 };
 
 

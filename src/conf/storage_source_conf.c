@@ -110,7 +110,7 @@ VIR_ENUM_IMPL(virStorageSourcePoolMode,
 
 VIR_ENUM_IMPL(virStorageAuth,
               VIR_STORAGE_AUTH_TYPE_LAST,
-              "none", "chap", "ceph",
+              "none", "chap", "ceph", "daos",
 );
 
 
