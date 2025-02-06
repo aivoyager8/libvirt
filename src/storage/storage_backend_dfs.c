@@ -35,6 +35,8 @@
 #include "storage_backend_dfs.h"
 #include "daos.h"
 #include "daos_fs.h"
+#include <fcntl.h>
+#include <sys/stat.h>
 
 #define VIR_FROM_THIS VIR_FROM_STORAGE
 
@@ -53,13 +55,21 @@ struct _virStorageBackendDFSState {
 typedef struct _virStorageBackendDFSState virStorageBackendDFSState;
 
 typedef struct _virStoragePoolDFSConfigOptionsDef {
-    size_t noptions;
-    char **names;
-    char **values;
+    char *pool_name;         /* DFS pool name */
+    char *host;             /* DFS server host */
+    int port;               /* DFS server port */
+    char *username;         /* Auth username */
+    char *secret_uuid;      /* Auth secret UUID */
+    size_t noptions;        /* Number of additional options */
+    char **names;           /* Option names array */ 
+    char **values;          /* Option values array */
 } virStoragePoolDFSConfigOptionsDef;
 
 // 添加前向声明
 static void virStoragePoolDefDFSNamespaceFree(void *nsdata);
+static char *virStorageBackendDFSFormatURI(const char *pool_name,
+                                          const char *user,
+                                          const char *container);
 
 /**
  * Opens a connection to the DFS storage backend.
@@ -72,39 +82,36 @@ static void virStoragePoolDefDFSNamespaceFree(void *nsdata);
 static int virStorageBackendDFSOpenConn(virStorageBackendDFSState *ptr,
                                        virStoragePoolDef *def)
 {
-    g_autofree char *pool_cont = NULL;
+    virStoragePoolDFSConfigOptionsDef *opts = def->namespaceData;
     int ret = -1;
-    char *slash;
+    g_autofree char *sys = NULL; 
 
-    if (!ptr || !def || !def->source.name || !def->source.dir) {
+    if (!ptr || !def) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                       _("missing required DFS connection parameters"));
         return -1;
     }
 
-    // Make a copy and parse pool/container
-    pool_cont = g_strdup(def->source.dir);
-    if ((slash = strchr(pool_cont, '/')) == NULL) {
-        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                      _("invalid DFS dir format - expected pool/container"));
+    // 设置 DAOS 系统参数
+    sys = g_strdup_printf("%s:%d", opts->host, opts->port);
+    
+    // 使用 daos_init 进行初始化
+    ret = daos_init();
+    if (ret < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                      _("Failed to init DAOS: %d"), ret);
         return -1;
     }
-    *slash = '\0';
 
-    // Store pool and container names
-    ptr->pool = g_strdup(pool_cont);
-    ptr->cont = g_strdup(slash + 1);
-    ptr->file = g_strdup(def->source.name);
-
-    if (!ptr->pool || !ptr->cont || !ptr->file) {
-        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                      _("failed to allocate DFS connection strings"));
-        goto cleanup;
+    // 如果有认证信息,设置认证
+    if (opts->username) {
+        // TODO: 处理认证
     }
 
-    // Connect to DAOS pool
-    ret = daos_pool_connect(ptr->pool, NULL, DAOS_PC_RW, 
+    // 连接存储池
+    ret = daos_pool_connect(opts->pool_name, sys, DAOS_PC_RW, 
                            &ptr->poh, NULL, NULL);
+
     if (ret < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                       _("failed to connect to DFS pool '%s': %d"),
@@ -197,12 +204,15 @@ static int virStorageBackendDFSCreateVol(virStoragePoolObj *pool,
     vol->type = VIR_STORAGE_VOL_NETWORK;
     vol->target.format = VIR_STORAGE_FILE_RAW;
 
-    // Update volume paths
+    // Update volume paths using DFS URI format
     g_clear_pointer(&vol->target.path, g_free);
-    vol->target.path = g_strdup_printf("%s/%s", def->source.dir, vol->name);
+    vol->target.path = virStorageBackendDFSFormatURI(ptr->pool, 
+                                                    ptr->cont,
+                                                    vol->name);
 
     g_clear_pointer(&vol->key, g_free);
-    vol->key = g_strdup_printf("%s/%s", def->source.name, vol->name);
+    vol->key = g_strdup_printf("dfs:%s/%s/%s",
+                              ptr->pool, ptr->cont, vol->name);
 
     if (!vol->target.path || !vol->key) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
@@ -222,15 +232,33 @@ cleanup:
 
 static int 
 virStorageBackendDFSDeleteVol(virStoragePoolObj *pool,
-                              virStorageVolDef *vol,
-                              unsigned int flags)
+                             virStorageVolDef *vol,
+                             unsigned int flags G_GNUC_UNUSED)
 {
     virStoragePoolDef *def = virStoragePoolObjGetDef(pool);
+    virStorageBackendDFSState *ptr = NULL; 
+    int ret = -1;
 
-    VIR_DEBUG("Deleting DFS volume pool=%p vol=%s flags=0x%x def=%p",
-              pool, vol->name, flags, def);
+    if (!(ptr = g_new0(virStorageBackendDFSState, 1)))
+        return -1;
 
-    return 0;
+    if (virStorageBackendDFSOpenConn(ptr, def) < 0)
+        goto cleanup;
+
+    // 删除 DFS 文件
+    ret = dfs_remove(ptr->dfs, NULL, vol->name, true, NULL);
+    if (ret < 0 && ret != -ENOENT) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                      _("failed to remove DFS file '%s'"), vol->name);
+        goto cleanup;
+    }
+
+    ret = 0;
+
+cleanup:
+    virStorageBackendDFSCloseConn(ptr);
+    VIR_FREE(ptr);
+    return ret;
 }
 
 static int 
@@ -288,16 +316,50 @@ cleanup:
 static int
 virStorageBackendDFSBuildVol(virStoragePoolObj *pool,
                             virStorageVolDef *vol,
-                            unsigned int flags)  
+                            unsigned int flags G_GNUC_UNUSED)  
 {
-    int ret = -1;
     virStoragePoolDef *def = virStoragePoolObjGetDef(pool);
     virStorageBackendDFSState *ptr = NULL;
+    dfs_obj_t *obj = NULL;
+    int ret = -1;
 
-    VIR_DEBUG("Building DFS volume pool=%p vol=%s flags=0x%x def=%p ptr=%p",
-              pool, vol->name, flags, def, ptr);
+    // 检查容量参数
+    if (!vol->target.capacity) {
+        virReportError(VIR_ERR_NO_SUPPORT,
+                      _("volume capacity required for DFS pool"));
+        goto cleanup;
+    }
+
+    if (!(ptr = g_new0(virStorageBackendDFSState, 1)))
+        goto cleanup;
+
+    if (virStorageBackendDFSOpenConn(ptr, def) < 0)
+        goto cleanup;
+
+    // 创建 DFS 文件
+    ret = dfs_open(ptr->dfs, NULL, vol->name, S_IFREG | 0644,
+                   O_CREAT | O_RDWR, 0, 0, NULL, &obj);
+    if (ret < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                      _("failed to create DFS file '%s'"), vol->name);
+        goto cleanup;
+    }
+
+    // 设置文件大小
+    ret = dfs_punch(ptr->dfs, obj, 0, vol->target.capacity);
+    if (ret < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,  
+                      _("failed to set size for '%s'"), vol->name);
+        goto cleanup;
+    }
 
     ret = 0;
+
+cleanup:
+    if (obj)
+        dfs_release(obj); 
+    virStorageBackendDFSCloseConn(ptr);
+    VIR_FREE(ptr);
     return ret;
 }
 
@@ -325,11 +387,12 @@ virStorageBackendDFSBuildVolFrom(virStoragePoolObj *pool,
 
 static int
 virStorageBackendDFSRefreshVol(virStoragePoolObj *pool,
-                              virStorageVolDef *vol)
+                              virStorageVolDef *vol) 
 {
     virStoragePoolDef *def = virStoragePoolObjGetDef(pool);
     virStorageBackendDFSState *ptr = NULL;
     dfs_obj_t *obj = NULL;
+    struct stat stbuf;
     int ret = -1;
 
     if (!(ptr = g_new0(virStorageBackendDFSState, 1)))
@@ -338,7 +401,25 @@ virStorageBackendDFSRefreshVol(virStoragePoolObj *pool,
     if (virStorageBackendDFSOpenConn(ptr, def) < 0)
         goto cleanup;
 
-    VIR_DEBUG("Refreshing DFS volume '%s'", vol->name);
+    // 获取文件信息
+    ret = dfs_lookup(ptr->dfs, vol->name, DFS_RDONLY, &obj,
+                     NULL, &stbuf);
+    if (ret < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                      _("failed to lookup '%s'"), vol->name);
+        goto cleanup;  
+    }
+
+    // 更新卷信息
+    vol->target.capacity = stbuf.st_size;
+    vol->target.allocation = stbuf.st_blocks * 512;
+    vol->type = VIR_STORAGE_VOL_NETWORK;
+    vol->target.format = VIR_STORAGE_FILE_RAW;
+
+    // 更新路径
+    g_clear_pointer(&vol->target.path, g_free);
+    vol->target.path = g_strdup_printf("%s/%s/%s",
+                                      ptr->pool, ptr->cont, vol->name);
 
     ret = 0;
 
@@ -420,6 +501,11 @@ virStoragePoolDefDFSNamespaceFree(void *nsdata)
     if (!opts)
         return;
 
+    g_free(opts->pool_name);
+    g_free(opts->host); 
+    g_free(opts->username);
+    g_free(opts->secret_uuid);
+
     for (i = 0; i < opts->noptions; i++) {
         g_free(opts->names[i]);
         g_free(opts->values[i]);
@@ -435,72 +521,101 @@ virStoragePoolDefDFSNamespaceParse(xmlXPathContextPtr ctxt,
 {
     virStoragePoolDFSConfigOptionsDef *opts = NULL;
     g_autofree xmlNodePtr *nodes = NULL;
-    int nnodes;
-    int ret = -1;
+    g_autofree char *source_name = NULL;
+    g_autofree xmlNodePtr *hosts = NULL;
+    g_autofree char *auth_username = NULL;
+    g_autofree char *auth_uuid = NULL;
+    int nhosts;
+    int port = 10999; // 默认端口移到这里
 
-    nnodes = virXPathNodeSet("./dfs:config_opts/dfs:option", ctxt, &nodes);
-    if (nnodes < 0)
-        return -1;
-
-    if (nnodes == 0)
-        return 0;
-
-    opts = g_new0(virStoragePoolDFSConfigOptionsDef, 1);
-
-    opts->names = g_new0(char *, nnodes);
-    opts->values = g_new0(char *, nnodes); 
-
-    for (int i = 0; i < nnodes; i++) {
-        if (!(opts->names[opts->noptions] = 
-              virXMLPropString(nodes[i], "name"))) {
-            virReportError(VIR_ERR_XML_ERROR, "%s",
-                           _("no dfs option name specified"));
-            goto cleanup;
-        }
-
-        if (!(opts->values[opts->noptions] =
-              virXMLPropString(nodes[i], "value"))) {
-            virReportError(VIR_ERR_XML_ERROR,
-                           _("no value specified for option '%s'"),
-                           opts->names[opts->noptions]);
-            goto cleanup;
-        }
-
-        opts->noptions++;
+    // Parse pool name
+    source_name = virXPathString("string(./source/name)", ctxt);
+    if (!source_name) {
+        virReportError(VIR_ERR_XML_ERROR, "%s",
+                      _("DFS pool must specify name in source"));
+        return -1;  
     }
 
-    *nsdata = g_steal_pointer(&opts);
-    ret = 0;
+    // Parse host info
+    nhosts = virXPathNodeSet("./source/host", ctxt, &hosts);
+    if (nhosts <= 0) {
+        virReportError(VIR_ERR_XML_ERROR, "%s",
+                      _("DFS pool must specify host in source"));
+        return -1;
+    }
 
-cleanup:
+    // Parse auth info if present
+    auth_username = virXPathString("string(./source/auth/@username)", ctxt);
+    auth_uuid = virXPathString("string(./source/auth/secret/@uuid)", ctxt);
+
+    opts = g_new0(virStoragePoolDFSConfigOptionsDef, 1);
+    opts->pool_name = g_strdup(source_name);
+    opts->host = g_strdup(virXMLPropString(hosts[0], "name")); 
+    
+    // 正确调用 virXMLPropInt:
+    // virXMLPropInt(xmlNodePtr node, const char *name, int base,
+    //               virXMLPropFlags flags, int *result, int default_val)
+    if (virXMLPropInt(hosts[0], "port", 10, 0, &port, 10999) < 0)
+        goto cleanup;
+    opts->port = port;
+
+    if (auth_username)
+        opts->username = g_strdup(auth_username);
+    if (auth_uuid)
+        opts->secret_uuid = g_strdup(auth_uuid);
+
+    *nsdata = g_steal_pointer(&opts);
+    return 0;
+
+ cleanup:
     virStoragePoolDefDFSNamespaceFree(opts);
-    return ret;
+    return -1;
 }
 
-// DFS namespace format接口示例
+static char *
+virStorageBackendDFSFormatURI(const char *pool_name, 
+                             const char *user,
+                             const char *container)
+{
+    return g_strdup_printf("dfs://%s/%s/%s", pool_name, user, container);
+}
+
 static int
 virStoragePoolDefDFSNamespaceFormatXML(virBuffer *buf,
                                        void *nsdata)
 {
     virStoragePoolDFSConfigOptionsDef *def = nsdata;
+    g_autofree char *uri = NULL;
 
-    if (!def || !def->noptions)
+    if (!def)
         return 0;
 
-    virBufferAddLit(buf, "<dfs:config_opts>\n");
+    virBufferAddLit(buf, "<source>\n");
     virBufferAdjustIndent(buf, 2);
 
-    for (size_t i = 0; i < def->noptions; i++) {
-        if (def->names[i] && def->values[i])
-            virBufferAsprintf(buf, "<dfs:option name='%s' value='%s'/>\n",
-                             def->names[i], def->values[i]);
-    }
+    // Format DFS URI
+    uri = virStorageBackendDFSFormatURI(def->pool_name,
+                                       def->username,
+                                       def->pool_name); // 使用pool_name替代file
+    if (!uri)
+        return -1;
+
+    virBufferAsprintf(buf, "<protocol>dfs</protocol>\n");
+    virBufferAsprintf(buf, "<name>%s</name>\n", uri);
+
+    // Host elements could be added here as reserved fields
+    // virBufferAddLit(buf, "<host name='dfs.example.com'/>\n");
 
     virBufferAdjustIndent(buf, -2);
-    virBufferAddLit(buf, "</dfs:config_opts>\n");
+    virBufferAddLit(buf, "</source>\n");
+
+    // Format other options
+    if (def->noptions > 0) {
+        // ...existing format code...
+    }
+
     return 0;
 }
-
 
 virStorageBackend virStorageBackendDFS = {
     .type = VIR_STORAGE_POOL_DFS,
