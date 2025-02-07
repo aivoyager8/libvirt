@@ -46,6 +46,7 @@ struct _virStorageBackendDFSState {
     daos_handle_t poh;         /* Pool handle */
     daos_handle_t coh;         /* Container handle */ 
     dfs_t *dfs;               /* DFS mount handle */
+    daos_pool_info_t pinfo;   /* Pool information */
     time_t starttime;         /* Connection start time */
     char *pool;              /* Pool UUID or label */
     char *cont;              /* Container UUID or label */
@@ -91,9 +92,6 @@ static int virStorageBackendDFSOpenConn(virStorageBackendDFSState *ptr,
                       _("missing required DFS connection parameters"));
         return -1;
     }
-
-    // 设置 DAOS 系统参数
-    sys = g_strdup_printf("%s:%d", opts->host, opts->port);
     
     // 使用 daos_init 进行初始化
     ret = daos_init();
@@ -109,13 +107,13 @@ static int virStorageBackendDFSOpenConn(virStorageBackendDFSState *ptr,
     }
 
     // 连接存储池
-    ret = daos_pool_connect(opts->pool_name, sys, DAOS_PC_RW, 
-                           &ptr->poh, NULL, NULL);
+    ret = daos_pool_connect(opts->pool_name, NULL, DAOS_PC_RW, 
+                           &ptr->poh, &ptr->pinfo, NULL);
 
     if (ret < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                       _("failed to connect to DFS pool '%s': %d"),
-                      ptr->pool, ret);
+                      opts->pool_name, ret);
         goto cleanup;
     }
 
@@ -280,8 +278,7 @@ virStorageBackendDFSRefreshPool(virStoragePoolObj *pool)
 {
     virStoragePoolDef *def = virStoragePoolObjGetDef(pool);
     virStorageBackendDFSState *ptr = NULL;
-    dfs_obj_t *obj = NULL;
-    dfs_attr_t attr;
+    struct daos_pool_space *space;
     int ret = -1;
 
     if (!(ptr = g_new0(virStorageBackendDFSState, 1)))
@@ -290,27 +287,34 @@ virStorageBackendDFSRefreshPool(virStoragePoolObj *pool)
     if (virStorageBackendDFSOpenConn(ptr, def) < 0)
         goto cleanup;
 
-    if (dfs_query(ptr->dfs, &attr) != 0) {
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("failed to query DFS pool '%s'"), def->source.name);
+    // 查询存储池信息
+    if (daos_pool_query(ptr->poh, NULL, &ptr->pinfo, NULL, NULL) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, 
+                      _("failed to query DFS pool '%s'"), def->source.name);
         goto cleanup;
     }
 
-    def->capacity = attr.da_chunk_size;
-    def->allocation = attr.da_chunk_size; // For now use same as capacity
-    def->available = def->capacity - def->allocation;
+    // 获取存储池空间信息
+    space = &ptr->pinfo.pi_space;
 
-    VIR_DEBUG("Refreshed DFS pool '%s': capacity=%llu allocation=%llu available=%llu",
-              def->source.name, def->capacity, def->allocation, def->available);
+    // 每个target的平均可用空间(bytes) * target数量 = 总可用空间
+    def->available = space->ps_free_mean[DAOS_MEDIA_SCM] * space->ps_ntargets;
+    
+    // 每个target的容量 * target数量 = 总容量 
+    def->capacity = space->ps_space.s_total[DAOS_MEDIA_SCM] * space->ps_ntargets;
 
+    // 已分配空间 = 总容量 - 可用空间
+    def->allocation = def->capacity - def->available;
+
+    VIR_DEBUG("Refreshed DFS pool '%s': capacity=%llu allocation=%llu available=%llu ntargets=%u",
+              def->source.name, def->capacity, def->allocation,
+              def->available, space->ps_ntargets);
     ret = 0;
 
 cleanup:
-    if (obj)
-        dfs_release(obj);
     virStorageBackendDFSCloseConn(ptr);
     VIR_FREE(ptr);
-    return ret; 
+    return ret;
 }
 
 static int
@@ -577,43 +581,26 @@ virStorageBackendDFSFormatURI(const char *pool_name,
                              const char *user,
                              const char *container)
 {
-    return g_strdup_printf("dfs://%s/%s/%s", pool_name, user, container);
+    if (user)
+        return g_strdup_printf("dfs://%s/%s/%s", pool_name, user, container);
+    else
+        return g_strdup_printf("dfs://%s/%s", pool_name, container);
 }
 
+// 修改 virStoragePoolDefDFSNamespaceFormatXML 函数
 static int
 virStoragePoolDefDFSNamespaceFormatXML(virBuffer *buf,
-                                       void *nsdata)
+                                      void *nsdata)
 {
     virStoragePoolDFSConfigOptionsDef *def = nsdata;
-    g_autofree char *uri = NULL;
 
     if (!def)
         return 0;
 
-    virBufferAddLit(buf, "<source>\n");
-    virBufferAdjustIndent(buf, 2);
-
-    // Format DFS URI
-    uri = virStorageBackendDFSFormatURI(def->pool_name,
-                                       def->username,
-                                       def->pool_name); // 使用pool_name替代file
-    if (!uri)
-        return -1;
-
-    virBufferAsprintf(buf, "<protocol>dfs</protocol>\n");
-    virBufferAsprintf(buf, "<name>%s</name>\n", uri);
-
-    // Host elements could be added here as reserved fields
-    // virBufferAddLit(buf, "<host name='dfs.example.com'/>\n");
-
-    virBufferAdjustIndent(buf, -2);
-    virBufferAddLit(buf, "</source>\n");
-
-    // Format other options
-    if (def->noptions > 0) {
-        // ...existing format code...
-    }
-
+    // 这里不需要生成额外的source标签,因为主XML已经有source标签
+    // 只需要在主XML的source标签中添加我们的特定属性
+    virBufferAddLit(buf, "enable_pool_ops='yes'>\n");
+    
     return 0;
 }
 
