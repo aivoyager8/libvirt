@@ -68,9 +68,12 @@ typedef struct _virStoragePoolDFSConfigOptionsDef {
 
 // 添加前向声明
 static void virStoragePoolDefDFSNamespaceFree(void *nsdata);
-static char *virStorageBackendDFSFormatURI(const char *pool_name,
-                                          const char *user,
-                                          const char *container);
+
+/* Function declarations */
+static int 
+virStorageBackendDFSParseVolName(virStorageVolDef *vol,
+                                char **container,
+                                char **filename);
 
 /**
  * Opens a connection to the DFS storage backend.
@@ -152,6 +155,8 @@ static void virStorageBackendDFSCloseConn(virStorageBackendDFSState *ptr)
     {
         daos_pool_disconnect(ptr->poh, NULL);
         ptr->poh.cookie = 0;
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                   _("failed to disconnect from DFS pool"));
     }
 
     g_clear_pointer(&ptr->pool, g_free);
@@ -175,12 +180,19 @@ static int virStorageBackendDFSCreateVol(virStoragePoolObj *pool,
     dfs_obj_t *obj = NULL;
     virStorageBackendDFSState *ptr = NULL;
     int ret = -1;
+    g_autofree char *container = NULL;
+    g_autofree char *filename = NULL;
 
     if (!def || !vol) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                       _("missing pool or volume definition"));
         return -1;
     }
+
+    VIR_DEBUG("Creating DFS volume...");
+
+    virReportError(VIR_ERR_NO_SUPPORT, "%s",
+                   _("DFS volume creation is not supported"));
 
     // Check volume format early
     if (vol->target.format != VIR_STORAGE_FILE_RAW) {
@@ -195,22 +207,27 @@ static int virStorageBackendDFSCreateVol(virStoragePoolObj *pool,
     if (virStorageBackendDFSOpenConn(ptr, def) < 0)
         goto cleanup;
 
-    VIR_DEBUG("Creating DFS volume '%s' in pool '%s'", 
-              vol->name, def->source.name);
+    virReportError(VIR_ERR_NO_SUPPORT, "%s",
+                   _("DFS volume creating"));
+
+    // 修改调用,删除pool参数
+    if (virStorageBackendDFSParseVolName(vol, &container, &filename) < 0)
+        return -1;
 
     // Set volume attributes
     vol->type = VIR_STORAGE_VOL_NETWORK;
     vol->target.format = VIR_STORAGE_FILE_RAW;
 
-    // Update volume paths using DFS URI format
+    // Update volume paths using pool/container/filename format
     g_clear_pointer(&vol->target.path, g_free);
-    vol->target.path = virStorageBackendDFSFormatURI(ptr->pool, 
-                                                    ptr->cont,
-                                                    vol->name);
-
     g_clear_pointer(&vol->key, g_free);
-    vol->key = g_strdup_printf("dfs:%s/%s/%s",
-                              ptr->pool, ptr->cont, vol->name);
+
+    vol->target.path = g_strdup_printf("dfs:%s/%s",
+                                      def->source.name,
+                                      vol->name);
+    vol->key = g_strdup_printf("dfs:%s/%s", 
+                              def->source.name,
+                              vol->name);
 
     if (!vol->target.path || !vol->key) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
@@ -235,6 +252,9 @@ virStorageBackendDFSDeleteVol(virStoragePoolObj *pool,
 {
     virStoragePoolDef *def = virStoragePoolObjGetDef(pool);
     virStorageBackendDFSState *ptr = NULL; 
+    dfs_obj_t *parent = NULL;
+    g_autofree char *container = NULL;
+    g_autofree char *filename = NULL;
     int ret = -1;
 
     if (!(ptr = g_new0(virStorageBackendDFSState, 1)))
@@ -243,17 +263,28 @@ virStorageBackendDFSDeleteVol(virStoragePoolObj *pool,
     if (virStorageBackendDFSOpenConn(ptr, def) < 0)
         goto cleanup;
 
-    // 删除 DFS 文件
-    ret = dfs_remove(ptr->dfs, NULL, vol->name, true, NULL);
+    if (virStorageBackendDFSParseVolName(vol, &container, &filename) < 0)
+        goto cleanup;
+
+    ret = dfs_lookup(ptr->dfs, container, O_RDONLY, &parent, NULL, NULL);
+    if (ret < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                      _("failed to lookup container '%s'"), container);
+        goto cleanup;
+    }
+
+    ret = dfs_remove(ptr->dfs, parent, filename, true, NULL);
     if (ret < 0 && ret != -ENOENT) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
-                      _("failed to remove DFS file '%s'"), vol->name);
+                      _("failed to remove DFS file '%s/%s'"), container, filename);
         goto cleanup;
     }
 
     ret = 0;
 
 cleanup:
+    if (parent)
+        dfs_release(parent);
     virStorageBackendDFSCloseConn(ptr);
     VIR_FREE(ptr);
     return ret;
@@ -333,6 +364,9 @@ virStorageBackendDFSBuildVol(virStoragePoolObj *pool,
                       _("volume capacity required for DFS pool"));
         goto cleanup;
     }
+
+   virReportError(VIR_ERR_NO_SUPPORT, "%s",
+                   _("DFS volume creation is not supported"));
 
     if (!(ptr = g_new0(virStorageBackendDFSState, 1)))
         goto cleanup;
@@ -420,10 +454,16 @@ virStorageBackendDFSRefreshVol(virStoragePoolObj *pool,
     vol->type = VIR_STORAGE_VOL_NETWORK;
     vol->target.format = VIR_STORAGE_FILE_RAW;
 
-    // 更新路径
+    // 更新路径 - 使用正确的存储池名称和路径格式
     g_clear_pointer(&vol->target.path, g_free);
-    vol->target.path = g_strdup_printf("%s/%s/%s",
-                                      ptr->pool, ptr->cont, vol->name);
+    g_clear_pointer(&vol->key, g_free);
+
+    vol->target.path = g_strdup_printf("dfs:%s/%s",
+                                      def->source.name, 
+                                      vol->name);
+    vol->key = g_strdup_printf("dfs:%s/%s",
+                              def->source.name,
+                              vol->name);
 
     ret = 0;
 
@@ -576,16 +616,6 @@ virStoragePoolDefDFSNamespaceParse(xmlXPathContextPtr ctxt,
     return -1;
 }
 
-static char *
-virStorageBackendDFSFormatURI(const char *pool_name, 
-                             const char *user,
-                             const char *container)
-{
-    if (user)
-        return g_strdup_printf("dfs://%s/%s/%s", pool_name, user, container);
-    else
-        return g_strdup_printf("dfs://%s/%s", pool_name, container);
-}
 
 // 修改 virStoragePoolDefDFSNamespaceFormatXML 函数
 static int
@@ -637,4 +667,33 @@ virStorageBackendDFSRegister(void)
 
     return virStorageBackendNamespaceInit(VIR_STORAGE_POOL_DFS,
                                           &virStoragePoolDFSXMLNamespace);
+}
+
+static int 
+virStorageBackendDFSParseVolName(virStorageVolDef *vol,
+                                char **container,
+                                char **filename) 
+{
+    char *slash;
+
+    // 检查卷名是否包含 '/'
+    if (!(slash = strchr(vol->name, '/'))) {
+        virReportError(VIR_ERR_INVALID_ARG,
+                      _("volume name '%s' must be in format 'container/filename'"),
+                      vol->name);
+        return -1;
+    }
+
+    // 分割容器名和文件名
+    *container = g_strndup(vol->name, slash - vol->name);
+    *filename = g_strdup(slash + 1);
+
+    if (!**container || !**filename) {
+        virReportError(VIR_ERR_INVALID_ARG,
+                      _("invalid volume name '%s', must be 'container/filename'"),
+                      vol->name);
+        return -1;
+    }
+
+    return 0;
 }
